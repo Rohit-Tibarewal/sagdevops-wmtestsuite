@@ -3,7 +3,7 @@ pipeline {
     stages {
 		stage('Test') {
 				steps {
-					bat "${env.SAG_HOME}/common/lib/ant/bin/ant test"									
+					bat "${env.ANT_HOME}/bin/ant test"									
 				}
 		}
     }
