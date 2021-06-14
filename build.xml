@@ -1,0 +1,151 @@
+<?xml version="1.0"?>
+
+<project name="WmTestSuite Framework" default="test" basedir="." >
+	<property file="System.properties"/>
+	<property name="workspace.dir" location="."/>
+	<property name="testSuitePackagesPath" value="${isTestPkgsDir}"/>
+	
+	<taskdef classpath="${antContribJarPath}" resource="net/sf/antcontrib/antlib.xml"/>
+	
+	<path id="junitClasspath">
+                <fileset dir="${testISDir}/common/lib/testsuite" includes="*.jar"/>
+                <fileset dir="${testISDir}/common/lib" includes="**/*.jar"/>
+    </path>
+			
+    <target name="test" depends="initProject,startTest">
+		<description>Run tests.</description>
+		<echo message="Finished the Execution of WmTestSuite."/>
+	</target>	
+
+	<!--Main Init targets-->	
+	<target name="initProject" depends="inittestISDir,initJenkinsReportDir" description="init properties needed for the project">
+	</target>
+		
+	<!-- system properties properties -->
+	<target name="inittestISDir" unless="testISDir">
+		<fail message="System property 'testISDir' should be defined!"/>
+	</target>
+					
+	<!-- optional properties -->
+	<target name="initJenkinsReportDir" unless="jenkinsReportDir">
+		<property name="jenkinsReportDir" value=""/>
+	</target>
+
+	<target name="startTest" depends="jenkinsCheck">		
+		<var name="failedTestList" value=""/>
+		<!-- iterate over the test project and trigger all xml tests in the setup folder -->
+		<for param="testProject" keepgoing="true" trim="true">
+			<path>
+				<dirset dir="${testSuitePackagesPath}" includes="*" excludes=".*,${isTestPkgsIgnorePattern}" />
+			</path>
+			<sequential>
+				<trycatch reference="exception_ref">
+					<try>
+						<antcall target="junitTestAndReportXML">
+							<param name="testPackageName" value="@{testProject}" />
+						</antcall>						
+					</try>
+					<catch>
+						<echo message="JUnit test for package '@{testProject}' failed" />
+						<var name="failedTestList" value="${failedTestList} @{testProject}," />
+						<property name="testFail" refid="exception_ref" />
+					</catch>
+				</trycatch>
+			</sequential>
+		</for>
+		<if>
+			<not>		
+				<equals arg1="${failedTestList}" arg2="" trim="true" />
+			</not>
+			<then>
+				<!-- Report failure if any of the Test case fails and list the failed packages-->
+				<fail message="At least one test in wmtestsuite execution failed. Failed packages: ${failedTestList}" />
+			</then>
+			<else>
+				<echo message="All JUnit Tests passed."/>
+			</else>
+		</if>
+	</target>
+
+	<!-- will jenkins evaluate the test results -->
+	<target name="jenkinsCheck" >
+		 <condition property="isReportingToJenkins">
+		 	<not>
+            	<equals arg1="${jenkinsReportDir}" arg2="" trim="true"/>
+	 		</not>	
+	     </condition>
+	</target>
+
+	<!--execute only if the XML Test directory exists in the test package -->
+	<target name="junitTestAndReportXML" depends="junitInitTest,junitCleanUp">
+		<echo message="Starting JUnit tests for package '${testPackageName}'"/>
+		<mkdir dir="${testPackageReportsDir}" />
+		<property name="resourcesFolder" value="${testPackageName}/resources" />		
+		<for param="testSetupFile" keepgoing="true">
+			<path>
+				<fileset dir="${testPackageName}" includes="**/setup/*.xml" />
+			</path>
+			<sequential>
+				<basename property="fileBasename" file="@{testSetupFile}" suffix=".xml" />
+				<echo message="Running JUnit test '@{testSetupFile}'"/>
+				<junit printsummary="yes" haltonerror="yes" haltonfailure="yes" fork="true" failureproperty="WmTestSuite.failure" showoutput="true" dir="${testPackageName}">
+					<jvmarg value="-DwebMethods.integrationServer.name=${testISHost}" />
+					<jvmarg value="-DwebMethods.integrationServer.port=${testISPort}" />
+					<jvmarg value="-DwebMethods.integrationServer.userid=${testISUsername}" />
+					<jvmarg value="-DwebMethods.integrationServer.password=${testISPassword}" />
+					<jvmarg value="-DwebMethods.test.setup.filename=@{testSetupFile}" />
+					<classpath>
+						<path refid="junitClasspath" />
+					</classpath>
+					<formatter type="xml" />
+					<!--execute the individual JUnit test -->
+					<test name="com.wm.ps.test.WmTestSuite" outfile="TEST-${fileBasename}" haltonerror="yes" haltonfailure="yes" todir="${testPackageReportsDir}" />
+				</junit>
+				<replaceregexp file="${testPackageReportsDir}/TEST-${fileBasename}.xml" match=" name=&quot;com.wm.ps.test.WmTestSuite&quot; " replace=" name=&quot;com.wm.ps.test.WmTestSuite [${fileBasename}]&quot; " />												
+				<var name="fileBasename" unset="true" />
+			</sequential>
+		</for>
+
+		<!-- if jenkins report dir is set publicate results there-->
+		<antcall target="junitCopyResultsToReportsDir">
+			<param name="current.report.dir" value="${testPackageReportsDir}" />
+		</antcall>
+
+		<!-- create HTML report of the test results -->
+		<junitreport todir="${testPackageReportsDir}">
+			<fileset dir="${testPackageReportsDir}">
+				<include name="TEST-*.xml" />
+				<exclude name="TESTS-TestSuites.xml" />
+			</fileset>
+			<report format="frames" todir="${testPackageReportsDir}/html" />
+		</junitreport>
+		
+		<!-- Report failure if any of the Test case fails  -->	
+		<fail if="WmTestSuite.failure">Unit test failure</fail>
+
+	</target>
+	
+	<!-- Set the IS test packages Reports Directory -->	
+	<target name="junitInitTest">
+		<echo message="Init JUnit tests for package ${testPackageName}" />
+		<property name="testPackageReportsDir" value="${testPackageName}/resources/reports" />
+	</target>
+	
+	<!-- Cleanup the test packages Reports Directory -->
+	<target name="junitCleanUp">
+		<echo message="Going to Delete testPackageReportsDir ${testPackageReportsDir}" />
+		<delete dir="${testPackageReportsDir}" />								
+	</target>
+	
+	<!-- if jenkins report dir is set then publicate the results there-->
+	<target name="junitCopyResultsToReportsDir" depends="jenkinsCheck" if="isReportingToJenkins">
+		<echo message="Copying JUnit test results to folder '${jenkinsReportDir}'"/>
+		<copy todir="${jenkinsReportDir}">
+			<fileset dir="${current.report.dir}">
+				<include name="*.*" />
+				<exclude name="TESTS-TestSuites.xml"/>
+			</fileset>
+		</copy>
+	</target>
+	
+</project>
